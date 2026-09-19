@@ -1,138 +1,309 @@
 import os
-
-from openai import OpenAI
+import logging
+from dotenv import load_dotenv
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from openai import OpenAI
 
+# Carregar variáveis de ambiente
+load_dotenv()
 
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Configurar cliente OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# Configurar logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-COMMANDS = {
-    "codigo": "Criar código",
-    "programa": "Criar um programa",
-    "explicar": "Explicar código",
-    "corrigir": "Corrigir código",
-    "melhorar": "Melhorar código",
-    "python": "Programar em Python",
-    "javascript": "Programar em JavaScript",
-    "html": "Criar HTML",
-    "css": "Criar CSS",
-    "sql": "Criar SQL",
-    "api": "Criar uma API",
-    "bot": "Criar um bot",
-    "debug": "Encontrar erros",
-    "funcao": "Criar uma função",
-    "converter": "Converter código",
-    "projeto": "Planejar um projeto",
-    "otimizar": "Otimizar código",
-    "comentar": "Comentar código",
-}
+# Memória de conversas por usuário
+historico = {}
 
+# ==================== COMANDOS ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /start - boas-vindas"""
+    usuario = update.effective_user.first_name
     await update.message.reply_text(
-        "🤖 KodyxBot\n\n"
-        "Seu assistente de programação com IA!\n\n"
-        "Digite /ajuda para ver os comandos."
+        f"Olá, {usuario}! 👋\n\n"
+        "Sou um bot com IA que te ajuda com programação e muito mais.\n\n"
+        "**Comandos disponíveis:**\n"
+        "/start - Esta mensagem\n"
+        "/ajuda - Lista todos os comandos\n"
+        "/codigo <descrição> - Gera código\n"
+        "/explicar <código> - Explica um código\n"
+        "/bug <código> - Encontra bugs\n"
+        "/otimizar <código> - Sugere melhorias\n"
+        "/sql <descrição> - Gera query SQL\n"
+        "/regex <descrição> - Gera expressão regular\n"
+        "/comentar <código> - Adiciona comentários\n"
+        "/traduzir <código> - Traduz entre linguagens\n"
+        "/teste <código> - Gera testes unitários\n"
+        "/api <descrição> - Cria estrutura de API\n"
+        "/limpar - Limpa o histórico da conversa",
+        parse_mode="Markdown"
     )
-
 
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    texto = "🧠 COMANDOS DO KODYXBOT\n\n"
-
-    for comando, descricao in COMMANDS.items():
-        texto += f"/{comando} - {descricao}\n"
-
-    texto += (
-        "\nExemplo:\n"
-        "/codigo crie uma calculadora em Python"
+    """Comando /ajuda"""
+    await update.message.reply_text(
+        "**📚 COMANDOS DISPONÍVEIS**\n\n"
+        "**Programação:**\n"
+        "`/codigo <descrição>` - Gera código em qualquer linguagem\n"
+        "`/explicar <código>` - Explica o que o código faz\n"
+        "`/bug <código>` - Encontra erros e bugs\n"
+        "`/otimizar <código>` - Sugere otimizações\n"
+        "`/comentar <código>` - Adiciona comentários\n"
+        "`/traduzir <código>` - Traduz código entre linguagens\n"
+        "`/teste <código>` - Gera testes unitários\n\n"
+        "**Banco de Dados:**\n"
+        "`/sql <descrição>` - Gera queries SQL\n\n"
+        "**Utilidades:**\n"
+        "`/regex <descrição>` - Cria expressões regulares\n"
+        "`/api <descrição>` - Estrutura de API REST\n\n"
+        "**Conversa:**\n"
+        "Mande qualquer mensagem e eu respondo!\n"
+        "`/limpar` - Limpa o histórico\n\n"
+        "💡 **Dica:** Você pode enviar código direto (com ```) que eu analiso!",
+        parse_mode="Markdown"
     )
 
-    await update.message.reply_text(texto)
+async def limpar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /limpar"""
+    user_id = update.effective_user.id
+    if user_id in historico:
+        historico[user_id] = []
+    await update.message.reply_text("🧹 Histórico limpo!")
 
+# ==================== COMANDOS DE IA ====================
 
-async def processar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    comando = update.message.text.split()[0]
-    comando = comando.replace("/", "").split("@")[0]
-
-    pedido = " ".join(context.args).strip()
-
-    if not pedido:
-        await update.message.reply_text(
-            f"❌ Escreva o que você quer fazer.\n\n"
-            f"Exemplo:\n/{comando} crie uma calculadora em Python"
-        )
-        return
-
-    tipo = COMMANDS.get(comando, "Ajuda de programação")
-
-    prompt = f"""
-Você é o KodyxBot, um assistente de programação.
-
-Tipo de solicitação:
-{tipo}
-
-Pedido do usuário:
-{pedido}
-
-Responda em português do Brasil.
-
-Se criar código:
-- use bloco de código;
-- informe a linguagem;
-- forneça código completo;
-- explique brevemente como usar;
-- não invente bibliotecas.
-"""
-
+async def responder_ia(update: Update, prompt: str, sistema: str = None):
+    """Função base para respostas da IA"""
     try:
-        await update.message.reply_text("🤖 Pensando...")
-
-        response = client.responses.create(
-            model="gpt-5.6",
-            input=prompt
+        mensagens = []
+        if sistema:
+            mensagens.append({"role": "system", "content": sistema})
+        mensagens.append({"role": "user", "content": prompt})
+        
+        resposta = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=mensagens,
+            max_tokens=2000,
+            temperature=0.7
         )
+        
+        return resposta.choices[0].message.content
+    except Exception as e:
+        return f"❌ Erro ao processar: {str(e)}"
 
-        resposta = response.output_text
+async def codigo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /codigo"""
+    if not context.args:
+        await update.message.reply_text("❌ Use: `/codigo <o que você quer criar>`", parse_mode="Markdown")
+        return
+    
+    descricao = " ".join(context.args)
+    await update.message.reply_text("⏳ Gerando código...")
+    
+    prompt = f"Crie um código completo e funcional para: {descricao}. Inclua a linguagem apropriada, comentários e exemplos de uso."
+    resposta = await responder_ia(prompt, "Você é um programador sênior especialista em todas as linguagens.")
+    
+    # Dividir se for muito longo
+    if len(resposta) > 4000:
+        for i in range(0, len(resposta), 4000):
+            await update.message.reply_text(f"```\n{resposta[i:i+4000]}\n```", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(resposta)
 
-        if not resposta:
-            resposta = "Não consegui gerar uma resposta."
+async def explicar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /explicar"""
+    if not context.args:
+        await update.message.reply_text("❌ Use: `/explicar <código>` ou responda uma mensagem com código", parse_mode="Markdown")
+        return
+    
+    codigo_texto = " ".join(context.args)
+    await update.message.reply_text("⏳ Analisando...")
+    
+    prompt = f"Explique detalhadamente o que este código faz, linha por linha:\n\n{codigo_texto}"
+    resposta = await responder_ia(prompt, "Você é um professor de programação que explica de forma clara.")
+    await update.message.reply_text(resposta)
 
-        limite = 4000
+async def bug(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /bug"""
+    if not context.args:
+        await update.message.reply_text("❌ Use: `/bug <código>`", parse_mode="Markdown")
+        return
+    
+    codigo_texto = " ".join(context.args)
+    await update.message.reply_text("🔍 Procurando bugs...")
+    
+    prompt = f"Analise este código, encontre bugs, erros e problemas de segurança. Sugira correções:\n\n{codigo_texto}"
+    resposta = await responder_ia(prompt, "Você é um especialista em debugging e segurança.")
+    await update.message.reply_text(resposta)
 
-        for inicio in range(0, len(resposta), limite):
-            await update.message.reply_text(
-                resposta[inicio:inicio + limite]
-            )
+async def otimizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /otimizar"""
+    if not context.args:
+        await update.message.reply_text("❌ Use: `/otimizar <código>`", parse_mode="Markdown")
+        return
+    
+    codigo_texto = " ".join(context.args)
+    await update.message.reply_text("⚡ Otimizando...")
+    
+    prompt = f"Otimize este código para melhor performance, legibilidade e boas práticas:\n\n{codigo_texto}"
+    resposta = await responder_ia(prompt, "Você é um engenheiro de software especialista em otimização.")
+    await update.message.reply_text(resposta)
 
-    except Exception as erro:
-        print("ERRO:", erro)
+async def sql(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /sql"""
+    if not context.args:
+        await update.message.reply_text("❌ Use: `/sql <descrição da consulta>`", parse_mode="Markdown")
+        return
+    
+    descricao = " ".join(context.args)
+    await update.message.reply_text("🗄️ Gerando SQL...")
+    
+    prompt = f"Gere uma query SQL para: {descricao}. Considere boas práticas e otimização."
+    resposta = await responder_ia(prompt, "Você é um DBA especialista em SQL.")
+    await update.message.reply_text(resposta)
 
-        await update.message.reply_text(
-            "❌ Erro ao conectar com a IA.\n\n"
-            "Verifique as configurações do Render."
+async def regex(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /regex"""
+    if not context.args:
+        await update.message.reply_text("❌ Use: `/regex <o que você quer capturar>`", parse_mode="Markdown")
+        return
+    
+    descricao = " ".join(context.args)
+    await update.message.reply_text("🔤 Criando regex...")
+    
+    prompt = f"Crie uma expressão regular para: {descricao}. Explique cada parte da regex."
+    resposta = await responder_ia(prompt, "Você é especialista em expressões regulares.")
+    await update.message.reply_text(resposta)
+
+async def comentar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /comentar"""
+    if not context.args:
+        await update.message.reply_text("❌ Use: `/comentar <código>`", parse_mode="Markdown")
+        return
+    
+    codigo_texto = " ".join(context.args)
+    await update.message.reply_text("📝 Adicionando comentários...")
+    
+    prompt = f"Adicione comentários explicativos neste código:\n\n{codigo_texto}"
+    resposta = await responder_ia(prompt, "Você é um programador que documenta bem o código.")
+    await update.message.reply_text(resposta)
+
+async def traduzir(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /traduzir"""
+    if not context.args:
+        await update.message.reply_text("❌ Use: `/traduzir <código>`", parse_mode="Markdown")
+        return
+    
+    codigo_texto = " ".join(context.args)
+    await update.message.reply_text("🔄 Traduzindo...")
+    
+    prompt = f"Traduza este código para outra linguagem (Python, JavaScript, Java, C#, etc.) mantendo a funcionalidade:\n\n{codigo_texto}"
+    resposta = await responder_ia(prompt, "Você é um poliglota de programação.")
+    await update.message.reply_text(resposta)
+
+async def teste(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /teste"""
+    if not context.args:
+        await update.message.reply_text("❌ Use: `/teste <código>`", parse_mode="Markdown")
+        return
+    
+    codigo_texto = " ".join(context.args)
+    await update.message.reply_text("🧪 Gerando testes...")
+    
+    prompt = f"Gere testes unitários para este código:\n\n{codigo_texto}"
+    resposta = await responder_ia(prompt, "Você é especialista em testes de software.")
+    await update.message.reply_text(resposta)
+
+async def api(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /api"""
+    if not context.args:
+        await update.message.reply_text("❌ Use: `/api <descrição da API>`", parse_mode="Markdown")
+        return
+    
+    descricao = " ".join(context.args)
+    await update.message.reply_text("🌐 Criando estrutura de API...")
+    
+    prompt = f"Crie a estrutura de uma API REST para: {descricao}. Inclua rotas, controllers e models."
+    resposta = await responder_ia(prompt, "Você é um arquiteto de software especialista em APIs.")
+    await update.message.reply_text(resposta)
+
+# ==================== MENSAGENS NORMAIS ====================
+
+async def mensagem_normal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler para mensagens normais - conversa com IA"""
+    user_id = update.effective_user.id
+    texto = update.message.text
+    
+    # Verificar se é código (contém ``` ou parece código)
+    if "```" in texto or texto.startswith(("def ", "class ", "function ", "import ", "<?php", "public ", "private ")):
+        await update.message.reply_text("💡 Detectei código! Use `/explicar`, `/bug` ou `/otimizar` para análise específica. Ou continue digitando que eu analiso!")
+    
+    await update.message.reply_text("🤔 Pensando...")
+    
+    # Manter contexto
+    if user_id not in historico:
+        historico[user_id] = []
+    
+    historico[user_id].append({"role": "user", "content": texto})
+    
+    # Limitar histórico
+    if len(historico[user_id]) > 10:
+        historico[user_id] = historico[user_id][-10:]
+    
+    try:
+        resposta = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Você é um assistente útil que ajuda com programação e diversas tarefas. Responda de forma clara e objetiva."}
+            ] + historico[user_id],
+            max_tokens=1500
         )
+        
+        texto_resposta = resposta.choices[0].message.content
+        historico[user_id].append({"role": "assistant", "content": texto_resposta})
+        
+        await update.message.reply_text(texto_resposta)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erro: {str(e)}")
 
+# ==================== MAIN ====================
 
 def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-
+    """Inicia o bot"""
+    print("🤖 Bot iniciando...")
+    
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    
+    # Registrar comandos
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("ajuda", ajuda))
-
-    for comando in COMMANDS:
-        app.add_handler(
-            CommandHandler(comando, processar)
-        )
-
-    print("KodyxBot iniciado!")
-
+    app.add_handler(CommandHandler("help", ajuda))
+    app.add_handler(CommandHandler("limpar", limpar))
+    app.add_handler(CommandHandler("codigo", codigo))
+    app.add_handler(CommandHandler("explicar", explicar))
+    app.add_handler(CommandHandler("bug", bug))
+    app.add_handler(CommandHandler("otimizar", otimizar))
+    app.add_handler(CommandHandler("sql", sql))
+    app.add_handler(CommandHandler("regex", regex))
+    app.add_handler(CommandHandler("comentar", comentar))
+    app.add_handler(CommandHandler("traduzir", traduzir))
+    app.add_handler(CommandHandler("teste", teste))
+    app.add_handler(CommandHandler("api", api))
+    
+    # Mensagens normais
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensagem_normal))
+    
+    print("✅ Bot rodando! Pressione Ctrl+C para parar.")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
