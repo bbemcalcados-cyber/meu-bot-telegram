@@ -1,164 +1,145 @@
 import os
-from telegram import Update, BotCommand
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 from openai import OpenAI
 
+Chaves configuradas nas Environment Variables do Render
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+Comandos disponíveis
 
-PROMPTS = {
-    "codigo": "Crie código de programação para o pedido abaixo. Explique brevemente como usar.",
-    "programa": "Crie um programa completo para o pedido abaixo. Organize o código e explique como executar.",
-    "explicar": "Explique o código ou conceito abaixo de forma simples e didática.",
-    "corrigir": "Analise o código abaixo, encontre os problemas e forneça uma versão corrigida.",
-    "melhorar": "Melhore o código abaixo mantendo seu objetivo original.",
-    "converter": "Converta o código abaixo para a linguagem solicitada.",
-    "python": "Ajude com programação Python usando boas práticas.",
-    "javascript": "Ajude com programação JavaScript usando boas práticas.",
-    "html": "Crie ou corrija HTML para o pedido abaixo.",
-    "css": "Crie ou corrija CSS para o pedido abaixo.",
-    "sql": "Crie ou corrija SQL para o pedido abaixo.",
-    "api": "Crie uma API para o pedido abaixo e explique sua estrutura.",
-    "bot": "Ajude a criar um bot para o pedido abaixo.",
-    "debug": "Faça uma análise de debug do problema abaixo e mostre possíveis correções.",
-    "funcao": "Crie uma função de programação para realizar o pedido abaixo.",
-    "projeto": "Planeje a estrutura de um projeto de programação para o pedido abaixo.",
-    "comentar": "Adicione comentários úteis ao código abaixo sem alterar sua lógica.",
-    "otimizar": "Otimize o código abaixo, explicando as principais melhorias.",
+COMMANDS = {
+"codigo": "Criar código",
+"programa": "Criar um programa",
+"explicar": "Explicar código",
+"corrigir": "Corrigir código",
+"melhorar": "Melhorar código",
+"python": "Programar em Python",
+"javascript": "Programar em JavaScript",
+"html": "Criar HTML",
+"css": "Criar CSS",
+"sql": "Criar SQL",
+"api": "Criar uma API",
+"bot": "Criar um bot",
+"debug": "Encontrar erros",
+"funcao": "Criar uma função",
+"converter": "Converter código",
+"projeto": "Planejar um projeto",
+"otimizar": "Otimizar código",
+"comentar": "Comentar código",
 }
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 Olá! Sou seu assistente de programação.\n\n"
-        "Use /ajuda para ver todos os comandos."
-    )
+texto = (
+"🤖 KodyxBot\n\n"
+"Seu assistente de programação com IA!\n\n"
+"Digite /ajuda para ver os comandos."
+)
 
+await update.message.reply_text(texto)
 
 async def ajuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    comandos = "\n".join(
-        f"/{nome} — {descricao}"
-        for nome, descricao in [
-            ("codigo", "criar código"),
-            ("programa", "criar programa"),
-            ("explicar", "explicar código"),
-            ("corrigir", "corrigir código"),
-            ("melhorar", "melhorar código"),
-            ("converter", "converter linguagem"),
-            ("python", "ajuda com Python"),
-            ("javascript", "ajuda com JavaScript"),
-            ("html", "criar HTML"),
-            ("css", "criar CSS"),
-            ("sql", "criar SQL"),
-            ("api", "criar API"),
-            ("bot", "criar bot"),
-            ("debug", "analisar erro"),
-            ("funcao", "criar função"),
-            ("projeto", "planejar projeto"),
-            ("comentar", "comentar código"),
-            ("otimizar", "otimizar código"),
-        ]
-    )
+texto = "🧠 COMANDOS DO KODYXBOT\n\n"
 
+for comando, descricao in COMMANDS.items():
+    texto += f"/{comando} — {descricao}\n"
+
+texto += (
+    "\n💡 Exemplo:\n"
+    "/codigo crie uma calculadora em Python\n\n"
+    "Ou:\n"
+    "/corrigir meu código está dando erro"
+)
+
+await update.message.reply_text(texto)
+
+async def processar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+comando = update.message.text.split()[0]
+comando = comando.replace("/", "").split("@")[0]
+
+pedido = " ".join(context.args).strip()
+
+if not pedido:
     await update.message.reply_text(
-        "🧠 COMANDOS DO ASSISTENTE\n\n"
-        + comandos
-        + "\n\nExemplo:\n"
-        "/codigo crie uma calculadora em Python"
+        f"❌ Você precisa escrever o que quer fazer.\n\n"
+        f"Exemplo:\n/{comando} crie uma calculadora em Python"
     )
+    return
 
+instrucoes = COMMANDS.get(comando, "Ajude o usuário com programação.")
 
-async def ia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    command = update.message.text.split()[0].replace("/", "").split("@")[0]
+prompt = f"""
 
-    pedido = " ".join(context.args).strip()
+Você é o KodyxBot, um assistente de programação.
 
-    if not pedido:
-        await update.message.reply_text(
-            f"❌ Use o comando assim:\n\n"
-            f"/{command} o que você quer fazer"
-        )
-        return
+Tipo de pedido: {instrucoes}
 
-    system_prompt = PROMPTS.get(
-        command,
-        "Ajude o usuário com programação."
-    )
+Pedido do usuário:
+{pedido}
 
-    await update.message.reply_text("🧠 Pensando...")
+Responda em português do Brasil.
 
-    try:
-        response = client.responses.create(
-            model="gpt-5.6",
-            instructions=system_prompt,
-            input=pedido,
-        )
+Quando criar código:
 
-        resposta = response.output_text
+- use blocos de código;
 
-        # Telegram possui limite de tamanho para mensagens.
-        limite = 4000
+- informe a linguagem;
 
-        for i in range(0, len(resposta), limite):
-            await update.message.reply_text(
-                resposta[i:i + limite]
-            )
+- mantenha o código completo;
 
-    except Exception as e:
-        print("Erro:", e)
+- explique brevemente como usar;
 
-        await update.message.reply_text(
-            "❌ Ocorreu um erro ao conversar com a IA."
-        )
+- não invente bibliotecas ou funções que não existem.
+  """
+  
+  try:
+  await update.message.reply_text("🤖 KodyxBot está pensando...")
+  
+    resposta = client.responses.create(
+      model="gpt-5.6",
+      input=prompt
+  )
 
+  texto = resposta.output_text
 
-async def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+  if not texto:
+      texto = "❌ A IA não retornou uma resposta."
 
-    comandos = [
-        BotCommand("start", "iniciar o bot"),
-        BotCommand("ajuda", "ver todos os comandos"),
-        BotCommand("codigo", "criar código"),
-        BotCommand("programa", "criar programa"),
-        BotCommand("explicar", "explicar código"),
-        BotCommand("corrigir", "corrigir código"),
-        BotCommand("melhorar", "melhorar código"),
-        BotCommand("converter", "converter código"),
-        BotCommand("python", "ajuda com Python"),
-        BotCommand("javascript", "ajuda com JavaScript"),
-        BotCommand("html", "criar HTML"),
-        BotCommand("css", "criar CSS"),
-        BotCommand("sql", "criar SQL"),
-        BotCommand("api", "criar API"),
-        BotCommand("bot", "criar bot"),
-        BotCommand("debug", "debug de código"),
-        BotCommand("funcao", "criar função"),
-        BotCommand("projeto", "planejar projeto"),
-        BotCommand("comentar", "comentar código"),
-        BotCommand("otimizar", "otimizar código"),
-    ]
+  # Divide respostas muito grandes para o limite do Telegram
+  limite = 4000
 
-    await app.bot.set_my_commands(comandos)
+  for inicio in range(0, len(texto), limite):
+      await update.message.reply_text(
+          texto[inicio:inicio + limite]
+      )
+  
+  except Exception as erro:
+  print("ERRO:", erro)
+  
+    await update.message.reply_text(
+      "❌ Não consegui falar com a IA.\n\n"
+      "Verifique se OPENAI_API_KEY está configurada corretamente "
+      "no Render."
+  )
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ajuda", ajuda))
+def main():
+app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    for command in PROMPTS:
-        app.add_handler(CommandHandler(command, ia_command))
+# Comandos básicos
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("ajuda", ajuda))
 
-    print("🤖 Bot iniciado!")
+# Comandos de programação
+for comando in COMMANDS:
+    app.add_handler(CommandHandler(comando, processar))
 
-    await app.run_polling()
+print("🤖 KodyxBot iniciado!")
 
+app.run_polling()
 
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+if name == "main":
+main()
